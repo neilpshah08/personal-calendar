@@ -70,6 +70,13 @@ export default function WeeklyView({ initialDate }: { initialDate?: string }) {
 
   useEffect(() => { load() }, [load])
 
+  // Sync GCal on mount; reload when done
+  useEffect(() => {
+    fetch('/api/sync/gcal', { method: 'POST' })
+      .then(() => load())
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="flex flex-col h-screen bg-white">
       {/* Header */}

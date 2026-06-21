@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { validateUpsertException } from '@/lib/validation'
 import type { UpsertExceptionBody } from '@/lib/types'
+import { syncExceptionToGCal } from '@/lib/gcal/write'
 
 type Params = { params: Promise<{ id: string; date: string }> }
 
@@ -105,6 +106,9 @@ export async function PUT(request: NextRequest, { params }: Params) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // GCal write-back (fire-and-forget errors)
+  await syncExceptionToGCal(supabase, user.id, id, date, b)
 
   return NextResponse.json(data, { status: 200 })
 }

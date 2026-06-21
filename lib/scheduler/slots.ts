@@ -75,7 +75,7 @@ export async function getOccupiedSlots(
 
   for (const p of placements ?? []) {
     const start    = timeToMinutes(p.placed_start_time)
-    const duration = (p.schedulable_items as { duration_minutes: number }).duration_minutes
+    const duration = (p.schedulable_items as unknown as { duration_minutes: number }).duration_minutes
     slots.push({ startMinutes: start, endMinutes: start + duration, itemId: p.item_id, isFlex: true })
   }
 

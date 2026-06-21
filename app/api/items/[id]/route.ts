@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { validateUpdateItem } from '@/lib/validation'
 import type { UpdateItemBody, SchedulableItem } from '@/lib/types'
 import { runScheduler, findNonFlexConflict, timeToMinutes } from '@/lib/scheduler'
+import { syncItemToGCal, deleteItemFromGCal } from '@/lib/gcal/write'
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -158,6 +159,11 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     })
   }
 
+  // ── GCal write-back ───────────────────────────────────────────────────────
+  if (!typedNew.is_flexible) {
+    await syncItemToGCal(supabase, user.id, typedNew)
+  }
+
   return NextResponse.json(newItem)
 }
 
@@ -172,10 +178,10 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Fetch before delete so we can trigger the right scheduler scope
+  // Fetch before delete so we can trigger the right scheduler scope and write-back
   const { data: item } = await supabase
     .from('schedulable_items')
-    .select('is_flexible, fixed_date, recurrence_start_date')
+    .select('is_flexible, fixed_date, recurrence_start_date, gcal_event_id, gcal_calendar_id, source')
     .eq('id', id)
     .eq('user_id', user.id)
     .single()
@@ -197,6 +203,11 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
       if (date) {
         await runScheduler(supabase, user.id, { type: 'delete_nonflex', date })
       }
+    }
+
+    // GCal write-back: delete the event if it was app-created and had a GCal mirror
+    if (item.source !== 'gcal' && item.gcal_event_id && item.gcal_calendar_id) {
+      await deleteItemFromGCal(supabase, user.id, item.gcal_event_id, item.gcal_calendar_id)
     }
   }
 

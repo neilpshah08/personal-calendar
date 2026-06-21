@@ -76,6 +76,7 @@ export async function GET(request: NextRequest) {
         recurrence_start_date: item.recurrence_start_date,
         recurrence_end_date: item.recurrence_end_date,
         has_confirmed_overlap: false,
+        source: (item.source ?? 'app') as 'app' | 'gcal',
       })
     }
   }
@@ -123,6 +124,7 @@ export async function GET(request: NextRequest) {
         recurrence_start_date: null,
         recurrence_end_date: null,
         has_confirmed_overlap: false,
+        source: 'app' as const,
       })
     }
   }
@@ -151,6 +153,7 @@ export async function GET(request: NextRequest) {
       recurrence_start_date: null,
       recurrence_end_date: null,
       has_confirmed_overlap: false,
+      source: (item.source ?? 'app') as 'app' | 'gcal',
     }
   })
 

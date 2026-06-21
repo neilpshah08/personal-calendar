@@ -64,7 +64,7 @@ export async function bumpConflictsToday(
   // Directly conflicting placements only
   const conflicting = placements.filter(p => {
     const pStart = timeToMinutes(p.placed_start_time)
-    const pEnd   = pStart + (p.schedulable_items as { duration_minutes: number }).duration_minutes
+    const pEnd   = pStart + (p.schedulable_items as unknown as { duration_minutes: number }).duration_minutes
     return pStart < newItemEndMinutes && pEnd > newItemStartMinutes
   })
 
@@ -75,7 +75,7 @@ export async function bumpConflictsToday(
 
   // Process each bumped item sequentially so earlier placements don't block later ones
   for (const conflict of conflicting) {
-    const item = conflict.schedulable_items as {
+    const item = conflict.schedulable_items as unknown as {
       id: string
       duration_minutes: number
       due_date: string | null

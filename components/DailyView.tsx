@@ -126,6 +126,9 @@ export default function DailyView({ initialDate }: { initialDate?: string }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const blocksRef = useRef<HTMLDivElement>(null)
   const hasScrolled = useRef(false)
+  // Ref always points to the current loadItems so the sync callback captures the right date
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  const loadItemsRef = useRef<() => void>(() => {})
 
   // Load items for current date
   const loadItems = useCallback(async () => {
@@ -135,7 +138,15 @@ export default function DailyView({ initialDate }: { initialDate?: string }) {
     setLoading(false)
   }, [date])
 
+  useEffect(() => { loadItemsRef.current = loadItems }, [loadItems])
   useEffect(() => { loadItems() }, [loadItems])
+
+  // Sync GCal on view load; reload items when done so GCal events appear
+  useEffect(() => {
+    fetch('/api/sync/gcal', { method: 'POST' })
+      .then(() => loadItemsRef.current())
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load tags once
   useEffect(() => {
@@ -426,29 +437,40 @@ export default function DailyView({ initialDate }: { initialDate?: string }) {
               const blockW = `calc(${(1 / item.totalCols) * 100}% - 6px)`
               const blockL = `calc(${(item.col / item.totalCols) * 100}% + 3px)`
               const blockH = Math.max(minY(item.duration_minutes), 22)
+              const isGCal = item.source === 'gcal'
 
               return (
                 <div
                   key={item.id}
-                  className={`absolute rounded-md overflow-hidden cursor-pointer transition-shadow ${isDragging ? 'shadow-lg z-30 opacity-80' : 'z-10 hover:shadow-md'}`}
+                  className={`absolute rounded-md overflow-hidden transition-shadow
+                    ${isGCal ? 'cursor-default' : 'cursor-pointer'}
+                    ${isDragging ? 'shadow-lg z-30 opacity-80' : 'z-10 hover:shadow-md'}`}
                   style={{
                     top: minY(startMins),
                     height: blockH,
                     left: blockL,
                     width: blockW,
-                    backgroundColor: hexToRgba(color, 0.12),
+                    backgroundColor: hexToRgba(color, isGCal ? 0.08 : 0.12),
                     borderLeft: `3px solid ${color}`,
+                    borderStyle: isGCal ? 'dashed' : 'solid',
                     outline: item.has_confirmed_overlap ? '1.5px solid #f87171' : undefined,
                     outlineOffset: '-1px',
                   }}
-                  onPointerDown={e => onBlockPointerDown(e, item)}
-                  onPointerMove={e => onBlockPointerMove(e, item.id)}
-                  onPointerUp={e => onBlockPointerUp(e, item)}
+                  {...(!isGCal && {
+                    onPointerDown: (e: React.PointerEvent) => onBlockPointerDown(e, item),
+                    onPointerMove: (e: React.PointerEvent) => onBlockPointerMove(e, item.id),
+                    onPointerUp:   (e: React.PointerEvent) => onBlockPointerUp(e, item),
+                  })}
                 >
                   <div className="px-2 py-1 h-full flex flex-col justify-start overflow-hidden">
-                    <span className="text-xs font-semibold leading-tight truncate" style={{ color }}>
-                      {item.title}
-                    </span>
+                    <div className="flex items-center gap-1 min-w-0">
+                      <span className="text-xs font-semibold leading-tight truncate flex-1" style={{ color }}>
+                        {item.title}
+                      </span>
+                      {isGCal && (
+                        <span className="text-[9px] font-bold text-gray-400 flex-shrink-0 leading-none">G</span>
+                      )}
+                    </div>
                     {blockH >= 36 && (
                       <span className="text-xs text-gray-500 leading-tight mt-0.5">
                         {fmtTime(item.startMinutes)}

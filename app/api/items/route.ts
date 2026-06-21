@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { validateCreateItem } from '@/lib/validation'
 import type { CreateItemBody } from '@/lib/types'
 import { runScheduler, findNonFlexConflict, timeToMinutes } from '@/lib/scheduler'
+import { syncItemToGCal } from '@/lib/gcal/write'
 
 // GET /api/items
 // Optional query params:
@@ -56,7 +57,7 @@ export async function POST(request: NextRequest) {
 
   // Extract `confirmed` before validation so it doesn't pollute the item body
   const { confirmed, ...bodyRaw } = (raw ?? {}) as Record<string, unknown>
-  const body = bodyRaw as CreateItemBody
+  const body = bodyRaw as unknown as CreateItemBody
 
   const errors = validateCreateItem(body)
   if (errors.length > 0) {
@@ -88,7 +89,7 @@ export async function POST(request: NextRequest) {
   // ── Insert ────────────────────────────────────────────────────────────────
   const { data: item, error: insertError } = await supabase
     .from('schedulable_items')
-    .insert(buildInsert(user.id, body))
+    .insert(buildInsert(user.id, body) as Record<string, unknown>)
     .select()
     .single()
 
@@ -128,6 +129,11 @@ export async function POST(request: NextRequest) {
       startMinutes: newItemStartMinutes,
       endMinutes: newItemEndMinutes,
     })
+  }
+
+  // ── GCal write-back (non-blocking errors) ─────────────────────────────────
+  if (!body.is_flexible) {
+    await syncItemToGCal(supabase, user.id, item)
   }
 
   return NextResponse.json(item, { status: 201 })

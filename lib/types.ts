@@ -34,6 +34,8 @@ export interface SchedulableItem {
   gcal_event_id: string | null
   gcal_calendar_id: string | null
   gcal_last_synced_at: string | null
+  gcal_rrule: string | null
+  source: 'app' | 'gcal'
   created_at: string
   updated_at: string
 }
@@ -146,6 +148,8 @@ export interface CalendarItem {
   recurrence_end_date: string | null
   // True when a confirmed_overlaps row references this item on this date
   has_confirmed_overlap: boolean
+  // 'gcal' items are read-only in the app; edits must go through Google Calendar
+  source: 'app' | 'gcal'
 }
 
 export interface UpsertExceptionBody {

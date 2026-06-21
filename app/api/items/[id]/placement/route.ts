@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { findNonFlexConflict, timeToMinutes } from '@/lib/scheduler'
+import { syncFlexPlacementToGCal } from '@/lib/gcal/write'
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -30,10 +31,10 @@ export async function PUT(request: NextRequest, { params }: Params) {
   const date = body.date
   const startTime = body.start_time
 
-  // Fetch the item — need duration_minutes for overlap math
+  // Fetch the item — need duration_minutes for overlap math and write-back fields
   const { data: item } = await supabase
     .from('schedulable_items')
-    .select('id, is_flexible, duration_minutes, is_recurring')
+    .select('id, is_flexible, duration_minutes, is_recurring, title, notes, source, gcal_event_id, gcal_calendar_id, gcal_last_synced_at, gcal_rrule, priority, tag_id, fixed_date, fixed_start_time, recurrence_days, recurrence_start_date, recurrence_end_date, earliest_date, due_date, user_id, created_at, updated_at')
     .eq('id', id)
     .eq('user_id', user.id)
     .single()
@@ -62,7 +63,7 @@ export async function PUT(request: NextRequest, { params }: Params) {
       .neq('item_id', id)
 
     for (const p of otherPlacements ?? []) {
-      const si = p.schedulable_items as { id: string; title: string; duration_minutes: number }
+      const si = p.schedulable_items as unknown as { id: string; title: string; duration_minutes: number }
       const pStart = timeToMinutes(p.placed_start_time)
       const pEnd = pStart + si.duration_minutes
       if (startMinutes < pEnd && endMinutes > pStart) {
@@ -114,5 +115,9 @@ export async function PUT(request: NextRequest, { params }: Params) {
     )
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // GCal write-back for manual placements
+  await syncFlexPlacementToGCal(supabase, user.id, item, date, startTime)
+
   return new NextResponse(null, { status: 204 })
 }
