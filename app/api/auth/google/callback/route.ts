@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { exchangeCodeForTokens } from '@/lib/google/oauth'
+import { encrypt } from '@/lib/google/encrypt'
 
 // GET /api/auth/google/callback
 // Handles the redirect from Google after the user grants (or denies) access.
@@ -42,8 +43,9 @@ export async function GET(request: NextRequest) {
       .upsert(
         {
           user_id: user.id,
-          access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token,
+          // Encrypt both tokens before persisting.
+          access_token: encrypt(tokens.access_token),
+          refresh_token: encrypt(tokens.refresh_token),
           token_expiry: tokenExpiry.toISOString(),
           calendar_id: 'primary',
         },

@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { refreshAccessToken } from './oauth'
+import { encrypt, decrypt } from './encrypt'
 
 // Returns a valid access token for the given user, refreshing it if it is
 // within 5 minutes of expiry. Throws if the user has no GCal connection.
@@ -16,20 +17,23 @@ export async function getValidAccessToken(userId: string): Promise<string> {
     throw new Error('No Google Calendar connection found for user')
   }
 
+  const accessToken = decrypt(data.access_token)
+  const refreshToken = decrypt(data.refresh_token)
+
   const expiresAt = new Date(data.token_expiry)
-  const bufferMs = 5 * 60 * 1000 // 5 minutes
+  const bufferMs = 5 * 60 * 1000
 
   if (expiresAt.getTime() - Date.now() > bufferMs) {
-    return data.access_token
+    return accessToken
   }
 
-  const refreshed = await refreshAccessToken(data.refresh_token)
+  const refreshed = await refreshAccessToken(refreshToken)
   const newExpiry = new Date(Date.now() + refreshed.expires_in * 1000)
 
   await supabase
     .from('google_calendar_connections')
     .update({
-      access_token: refreshed.access_token,
+      access_token: encrypt(refreshed.access_token),
       token_expiry: newExpiry.toISOString(),
     })
     .eq('user_id', userId)
