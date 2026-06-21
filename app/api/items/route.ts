@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { validateCreateItem } from '@/lib/validation'
 import type { CreateItemBody } from '@/lib/types'
+import { runScheduler, findNonFlexConflict, timeToMinutes } from '@/lib/scheduler'
 
 // GET /api/items
 // Optional query params:
@@ -36,6 +37,9 @@ export async function GET(request: NextRequest) {
 }
 
 // POST /api/items
+// For non-flexible items, if the slot overlaps an existing non-flexible item a
+// 409 is returned with `conflict` details.  Resend with `confirmed: true` to
+// proceed anyway and record a confirmed_overlaps row.
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
   const { data: { user }, error: authError } = await supabase.auth.getUser()
@@ -43,26 +47,89 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  let body: unknown
+  let raw: unknown
   try {
-    body = await request.json()
+    raw = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
+
+  // Extract `confirmed` before validation so it doesn't pollute the item body
+  const { confirmed, ...bodyRaw } = (raw ?? {}) as Record<string, unknown>
+  const body = bodyRaw as CreateItemBody
 
   const errors = validateCreateItem(body)
   if (errors.length > 0) {
     return NextResponse.json({ error: 'Validation failed', details: errors }, { status: 400 })
   }
 
-  const { data, error } = await supabase
+  // ── Conflict check for non-flexible items ─────────────────────────────────
+  let conflictDate: string | null = null
+  let newItemStartMinutes = 0
+  let newItemEndMinutes   = 0
+
+  if (!body.is_flexible) {
+    const date      = body.is_recurring ? body.recurrence_start_date : body.fixed_date
+    const startMin  = timeToMinutes(body.fixed_start_time)
+    const endMin    = startMin + body.duration_minutes
+    conflictDate    = date
+    newItemStartMinutes = startMin
+    newItemEndMinutes   = endMin
+
+    const conflict = await findNonFlexConflict(supabase, user.id, date, startMin, endMin)
+    if (conflict && !confirmed) {
+      return NextResponse.json(
+        { error: 'conflict', conflict },
+        { status: 409 },
+      )
+    }
+  }
+
+  // ── Insert ────────────────────────────────────────────────────────────────
+  const { data: item, error: insertError } = await supabase
     .from('schedulable_items')
-    .insert(buildInsert(user.id, body as CreateItemBody))
+    .insert(buildInsert(user.id, body))
     .select()
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data, { status: 201 })
+  if (insertError) return NextResponse.json({ error: insertError.message }, { status: 500 })
+
+  // ── Write confirmed_overlaps row if user confirmed a conflict ─────────────
+  if (!body.is_flexible && confirmed && conflictDate) {
+    const conflict = await findNonFlexConflict(
+      supabase, user.id, conflictDate, newItemStartMinutes, newItemEndMinutes, item.id,
+    )
+    if (conflict) {
+      await supabase.from('confirmed_overlaps').insert({
+        user_id: user.id,
+        nonflex_item_id: conflict.id,
+        nonflex_occurrence_date: body.is_recurring ? null : conflictDate,
+        other_item_id: item.id,
+        other_item_type: 'non_flexible',
+        overlap_date: conflictDate,
+      })
+    }
+  }
+
+  // ── Trigger scheduler ─────────────────────────────────────────────────────
+  if (body.is_flexible) {
+    await runScheduler(supabase, user.id, {
+      type: 'new_flexible',
+      itemId: item.id,
+      durationMinutes: item.duration_minutes,
+      earliestDate: item.earliest_date,
+      dueDate: item.due_date,
+    })
+  } else {
+    await runScheduler(supabase, user.id, {
+      type: 'new_nonflex',
+      date: conflictDate!,
+      startMinutes: newItemStartMinutes,
+      endMinutes: newItemEndMinutes,
+    })
+  }
+
+  return NextResponse.json(item, { status: 201 })
 }
 
 function buildInsert(userId: string, body: CreateItemBody) {
