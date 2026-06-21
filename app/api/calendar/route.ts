@@ -75,6 +75,7 @@ export async function GET(request: NextRequest) {
         recurrence_days: item.recurrence_days,
         recurrence_start_date: item.recurrence_start_date,
         recurrence_end_date: item.recurrence_end_date,
+        has_confirmed_overlap: false,
       })
     }
   }
@@ -121,6 +122,7 @@ export async function GET(request: NextRequest) {
         recurrence_days: null,
         recurrence_start_date: null,
         recurrence_end_date: null,
+        has_confirmed_overlap: false,
       })
     }
   }
@@ -148,11 +150,36 @@ export async function GET(request: NextRequest) {
       recurrence_days: null,
       recurrence_start_date: null,
       recurrence_end_date: null,
+      has_confirmed_overlap: false,
     }
   })
 
   const all = [...fixed, ...resolvedRecurring, ...flexItems]
     .sort((a, b) => a.startMinutes - b.startMinutes)
+
+  // ── Attach confirmed-overlap markers ──────────────────────────────────────────
+  if (all.length) {
+    const allIds = all.map(i => i.id)
+    const { data: overlapRows } = await supabase
+      .from('confirmed_overlaps')
+      .select('nonflex_item_id, flex_item_id_2, other_item_id')
+      .eq('user_id', user.id)
+      .eq('overlap_date', date)
+
+    const overlappingIds = new Set<string>()
+    const allIdSet = new Set(allIds)
+    for (const row of overlapRows ?? []) {
+      if (row.nonflex_item_id && allIdSet.has(row.nonflex_item_id)) overlappingIds.add(row.nonflex_item_id)
+      if (row.flex_item_id_2  && allIdSet.has(row.flex_item_id_2))  overlappingIds.add(row.flex_item_id_2)
+      if (row.other_item_id   && allIdSet.has(row.other_item_id))   overlappingIds.add(row.other_item_id)
+    }
+
+    if (overlappingIds.size) {
+      for (const item of all) {
+        if (overlappingIds.has(item.id)) item.has_confirmed_overlap = true
+      }
+    }
+  }
 
   return NextResponse.json(all)
 }

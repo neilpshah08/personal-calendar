@@ -430,6 +430,8 @@ export default function DailyView() {
                     width: blockW,
                     backgroundColor: hexToRgba(color, 0.12),
                     borderLeft: `3px solid ${color}`,
+                    outline: item.has_confirmed_overlap ? '1.5px solid #f87171' : undefined,
+                    outlineOffset: '-1px',
                   }}
                   onPointerDown={e => onBlockPointerDown(e, item)}
                   onPointerMove={e => onBlockPointerMove(e, item.id)}

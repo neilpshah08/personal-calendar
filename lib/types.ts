@@ -144,6 +144,8 @@ export interface CalendarItem {
   recurrence_days: number[] | null
   recurrence_start_date: string | null
   recurrence_end_date: string | null
+  // True when a confirmed_overlaps row references this item on this date
+  has_confirmed_overlap: boolean
 }
 
 export interface UpsertExceptionBody {

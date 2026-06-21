@@ -72,7 +72,16 @@ export async function PUT(request: NextRequest, { params }: Params) {
             conflict: { id: si.id, title: si.title, fixed_start_time: p.placed_start_time, duration_minutes: si.duration_minutes },
           }, { status: 409 })
         }
-        break // confirmed — allow, no confirmed_overlaps row for flex-vs-flex
+        // confirmed — write a confirmed_overlaps row using flex_item_id_2
+        await supabase.from('confirmed_overlaps').insert({
+          user_id: user.id,
+          nonflex_item_id: null,
+          flex_item_id_2: si.id,
+          other_item_id: id,
+          other_item_type: 'flexible_placement',
+          overlap_date: date,
+        })
+        break
       }
     }
   }
