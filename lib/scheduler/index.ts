@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { SchedulerTrigger, NonFlexConflict } from './types'
 import { getTodayStr, getNowMinutes, timeToMinutes, addDays, minDateStr } from './utils'
 import { dateToWeekday } from './utils'
-import { bumpConflictsToday, optimizeFuture } from './optimize'
+import { bumpConflictsToday, optimizeFuture, placeFlexItemTargeted } from './optimize'
 
 // ── Conflict detection ────────────────────────────────────────────────────────
 
@@ -115,19 +115,29 @@ export async function runScheduler(
 
     case 'new_flexible':
     case 'edit_flexible': {
-      // Re-optimize from the earliest date this item could land (respecting
-      // earliest_date constraint, never before today)
+      // Targeted: find a slot for only this item, never touch other placements.
+      // A new or edited flex item affects only its own position — reshuffling
+      // everything else would move unrelated placements for no visible reason.
       const fromDate =
         trigger.earliestDate && trigger.earliestDate > todayStr
           ? trigger.earliestDate
           : todayStr
-      await optimizeFuture(supabase, userId, fromDate, todayStr, nowMinutes)
+      await placeFlexItemTargeted(
+        supabase,
+        userId,
+        { id: trigger.itemId, duration_minutes: trigger.durationMinutes, due_date: trigger.dueDate },
+        fromDate,
+        todayStr,
+        nowMinutes,
+      )
       break
     }
 
     case 'delete_flexible': {
-      // Placement was cascade-deleted with the item; re-opt from today to
-      // potentially pull other items into the freed slot
+      // A deletion is a visible action: re-opt from today so unplaced items and
+      // items on the freed date can pull forward into the vacated slot.
+      // Full re-opt is warranted here because the user caused the change and
+      // moving other items to fill the gap is expected, not surprising.
       await optimizeFuture(supabase, userId, todayStr, todayStr, nowMinutes)
       break
     }

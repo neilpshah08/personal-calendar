@@ -98,9 +98,37 @@ export async function bumpConflictsToday(
   }
 }
 
+// Targeted placement for a single flexible item.
+// Removes the item's current placement (if any) and finds the best available
+// slot from fromDate onward without touching any other item's placement.
+// Used for new_flexible and edit_flexible triggers — the item's own position
+// changes, but nothing else moves.
+export async function placeFlexItemTargeted(
+  supabase: SupabaseClient,
+  userId: string,
+  item: { id: string; duration_minutes: number; due_date: string | null },
+  fromDate: string,
+  todayStr: string,
+  nowMinutes: number,
+): Promise<void> {
+  // Delete the current placement first (no-op if unplaced) so the item doesn't
+  // block its own slot search via getOccupiedSlots.
+  await supabase
+    .from('flexible_placements')
+    .delete()
+    .eq('item_id', item.id)
+
+  const result = await findFirstSlot(supabase, userId, item, fromDate, todayStr, nowMinutes)
+  if (result) {
+    await upsertPlacement(supabase, userId, item.id, result.date, result.startMinutes, false)
+  }
+  // null = due_date constraint unsatisfiable or 365-day cap hit; item remains unplaced
+}
+
 // Full re-optimization for all flexible items with placements on or after fromDate,
 // plus any currently unplaced flexible items.
 // Clears and re-packs in priority order; items placed before fromDate are untouched.
+// Only called for non-flex triggers (landscape changes) and delete_flexible (freed slot).
 export async function optimizeFuture(
   supabase: SupabaseClient,
   userId: string,
