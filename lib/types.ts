@@ -121,6 +121,31 @@ export interface UpdateItemBody {
   due_date?: string | null
 }
 
+// Shape returned by GET /api/calendar — all items resolved to a concrete time on a date
+export interface CalendarItem {
+  id: string
+  title: string
+  startMinutes: number          // 0–1439
+  duration_minutes: number
+  is_flexible: boolean
+  is_recurring: boolean
+  is_manually_placed: boolean
+  tag_id: string | null
+  tag_color: string | null
+  tag_name: string | null
+  priority: Priority | null
+  notes: string | null
+  // Flexible constraints
+  due_date: string | null
+  earliest_date: string | null
+  // Fixed / recurring fields (needed for edit form pre-fill)
+  fixed_date: string | null
+  fixed_start_time: string | null
+  recurrence_days: number[] | null
+  recurrence_start_date: string | null
+  recurrence_end_date: string | null
+}
+
 export interface UpsertExceptionBody {
   is_cancelled: boolean
   override_title?: string | null
