@@ -117,6 +117,7 @@ export async function POST(request: NextRequest) {
       type: 'new_flexible',
       itemId: item.id,
       durationMinutes: item.duration_minutes,
+      priority: item.priority,
       earliestDate: item.earliest_date,
       dueDate: item.due_date,
     })

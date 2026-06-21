@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { SchedulerTrigger, NonFlexConflict } from './types'
 import { getTodayStr, getNowMinutes, timeToMinutes, addDays, minDateStr } from './utils'
 import { dateToWeekday } from './utils'
-import { bumpConflictsToday, optimizeFuture, placeFlexItemTargeted } from './optimize'
+import { bumpConflictsToday, optimizeFuture, placeFlexItemWithDisplacement } from './optimize'
 
 // ── Conflict detection ────────────────────────────────────────────────────────
 
@@ -122,10 +122,10 @@ export async function runScheduler(
         trigger.earliestDate && trigger.earliestDate > todayStr
           ? trigger.earliestDate
           : todayStr
-      await placeFlexItemTargeted(
+      await placeFlexItemWithDisplacement(
         supabase,
         userId,
-        { id: trigger.itemId, duration_minutes: trigger.durationMinutes, due_date: trigger.dueDate },
+        { id: trigger.itemId, duration_minutes: trigger.durationMinutes, priority: trigger.priority, due_date: trigger.dueDate },
         fromDate,
         todayStr,
         nowMinutes,

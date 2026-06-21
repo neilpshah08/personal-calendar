@@ -143,6 +143,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       type: 'edit_flexible',
       itemId: id,
       durationMinutes: typedNew.duration_minutes,
+      priority: typedNew.priority,
       earliestDate: typedNew.earliest_date,
       dueDate: typedNew.due_date,
     })

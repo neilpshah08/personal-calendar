@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDays, maxDateStr, timeToMinutes } from './utils'
 import { getOccupiedSlots } from './slots'
-import { findBestPlacement } from './gaps'
+import { findBestPlacement, windowScore } from './gaps'
 import { upsertPlacement, findFirstSlot } from './place'
 
 interface FlexItemRow {
@@ -98,31 +98,105 @@ export async function bumpConflictsToday(
   }
 }
 
-// Targeted placement for a single flexible item.
-// Removes the item's current placement (if any) and finds the best available
-// slot from fromDate onward without touching any other item's placement.
-// Used for new_flexible and edit_flexible triggers — the item's own position
-// changes, but nothing else moves.
-export async function placeFlexItemTargeted(
+function isPriorityLower(candidate: string | null, than: string | null): boolean {
+  return (PRIORITY_RANK[candidate ?? 'Low'] ?? 2) > (PRIORITY_RANK[than ?? 'Low'] ?? 2)
+}
+
+// Per-day slot search that considers displacing a single lower-priority flex item
+// if that gives a strictly better window score than the best open gap.
+// Returns the chosen start minute and, if a bump is needed, the id of the item to move.
+async function findBestOnDay(
   supabase: SupabaseClient,
   userId: string,
-  item: { id: string; duration_minutes: number; due_date: string | null },
+  item: { id: string; duration_minutes: number; priority?: string | null },
+  date: string,
+  afterMinutes: number,
+): Promise<{ startMinutes: number; displacedItemId?: string } | null> {
+  const allOccupied = await getOccupiedSlots(supabase, userId, date, item.id)
+  const nonFlexOccupied = allOccupied.filter(s => !s.isFlex)
+
+  // Best fully open slot (no flex items evicted)
+  const openStart = findBestPlacement(allOccupied, item.duration_minutes, afterMinutes)
+  const openScore = openStart !== null ? windowScore(openStart, item.duration_minutes) : Infinity
+
+  // If we're already fully inside the preferred window, displacement can't improve things
+  if (openScore === 0) return { startMinutes: openStart! }
+
+  // Best slot ignoring flex placements (i.e. if we could displace them)
+  const displaceStart = findBestPlacement(nonFlexOccupied, item.duration_minutes, afterMinutes)
+  const displaceScore = displaceStart !== null ? windowScore(displaceStart, item.duration_minutes) : Infinity
+
+  // Displacement only worthwhile when it yields a strictly better score
+  if (displaceStart !== null && displaceScore < openScore) {
+    const itemEnd = displaceStart + item.duration_minutes
+    const blockingFlex = allOccupied.filter(
+      s => s.isFlex && s.startMinutes < itemEnd && s.endMinutes > displaceStart,
+    )
+    // Only displace when exactly one flex item blocks the slot (multi-block is too disruptive)
+    if (blockingFlex.length === 1) {
+      const { data: occupant } = await supabase
+        .from('schedulable_items')
+        .select('priority')
+        .eq('id', blockingFlex[0].itemId)
+        .single()
+      if (occupant && isPriorityLower(occupant.priority, item.priority ?? null)) {
+        return { startMinutes: displaceStart, displacedItemId: blockingFlex[0].itemId }
+      }
+    }
+  }
+
+  return openStart !== null ? { startMinutes: openStart } : null
+}
+
+// Targeted placement for a single flexible item with priority-based displacement.
+// Removes the item's current placement (if any) and finds the best available slot
+// from fromDate onward. If the best slot on a given day is held by a single
+// lower-priority flex item, that occupant is bumped to its own next available slot.
+// Nothing else moves — this is not a full re-optimization.
+// Used for new_flexible and edit_flexible triggers.
+export async function placeFlexItemWithDisplacement(
+  supabase: SupabaseClient,
+  userId: string,
+  item: { id: string; duration_minutes: number; priority?: string | null; due_date: string | null },
   fromDate: string,
   todayStr: string,
   nowMinutes: number,
 ): Promise<void> {
-  // Delete the current placement first (no-op if unplaced) so the item doesn't
-  // block its own slot search via getOccupiedSlots.
-  await supabase
-    .from('flexible_placements')
-    .delete()
-    .eq('item_id', item.id)
+  // Remove existing placement so it doesn't block its own search
+  await supabase.from('flexible_placements').delete().eq('item_id', item.id)
 
-  const result = await findFirstSlot(supabase, userId, item, fromDate, todayStr, nowMinutes)
-  if (result) {
-    await upsertPlacement(supabase, userId, item.id, result.date, result.startMinutes, false)
+  let date = fromDate
+  const SAFETY_CAP = 365
+
+  for (let daysChecked = 0; daysChecked < SAFETY_CAP; daysChecked++) {
+    if (item.due_date && date > item.due_date) break
+
+    const afterMinutes = date === todayStr ? nowMinutes : 0
+    const result = await findBestOnDay(supabase, userId, item, date, afterMinutes)
+
+    if (result) {
+      await upsertPlacement(supabase, userId, item.id, date, result.startMinutes, false)
+
+      if (result.displacedItemId) {
+        const { data: displaced } = await supabase
+          .from('schedulable_items')
+          .select('id, duration_minutes, due_date')
+          .eq('id', result.displacedItemId)
+          .single()
+        if (displaced) {
+          const bumped = await findFirstSlot(supabase, userId, displaced, date, todayStr, nowMinutes)
+          if (bumped) {
+            await upsertPlacement(supabase, userId, displaced.id, bumped.date, bumped.startMinutes, false)
+          }
+          // If no slot found, displaced item goes unplaced — acceptable, it was lower priority
+        }
+      }
+      return
+    }
+
+    date = addDays(date, 1)
   }
-  // null = due_date constraint unsatisfiable or 365-day cap hit; item remains unplaced
+  // 365-day cap or due_date exhausted — item remains unplaced
 }
 
 // Full re-optimization for all flexible items with placements on or after fromDate,

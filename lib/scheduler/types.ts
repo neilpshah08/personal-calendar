@@ -19,6 +19,7 @@ export type SchedulerTrigger =
       type: 'new_flexible' | 'edit_flexible'
       itemId: string
       durationMinutes: number
+      priority: string | null
       earliestDate: string | null
       dueDate: string | null
     }
