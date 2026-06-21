@@ -5,9 +5,9 @@ import { useRouter } from 'next/navigation'
 import type { CalendarItem } from '@/lib/types'
 
 // ── Mini-timeline constants ────────────────────────────────────────────────────
-// Show 6am–midnight (1080 min) compressed to 120px.
-const WIN_START = 360   // 6 am in minutes
-const WIN_END   = 1440  // midnight
+// Show 7am–11pm (960 min) compressed to 120px — matches the scheduler's preferred window.
+const WIN_START = 420   // 7 am in minutes
+const WIN_END   = 1380  // 11 pm
 const WIN_SPAN  = WIN_END - WIN_START
 const MINI_H    = 120   // px
 
