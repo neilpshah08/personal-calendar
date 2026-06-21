@@ -210,11 +210,30 @@ export default function DailyView() {
     const newTime = minsToHHMM(newStart)
 
     if (item.is_flexible) {
-      await fetch(`/api/items/${item.id}/placement`, {
+      const body: Record<string, unknown> = { date: viewDate, start_time: newTime }
+      if (confirmed) body.confirmed = true
+
+      const res = await fetch(`/api/items/${item.id}/placement`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: viewDate, start_time: newTime }),
+        body: JSON.stringify(body),
       })
+
+      if (res.status === 409) {
+        const data = await res.json()
+        const conflict = data.conflict
+        setPendingConflict({
+          itemId: item.id,
+          newStart,
+          viewDate,
+          conflictTitle: conflict?.title ?? 'another item',
+          conflictTime: conflict?.fixed_start_time
+            ? fmtTime(parseInt(conflict.fixed_start_time.slice(0, 2)) * 60 + parseInt(conflict.fixed_start_time.slice(3, 5)))
+            : '',
+        })
+        return
+      }
+
       loadItems()
       return
     }
