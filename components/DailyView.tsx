@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import type { CalendarItem, Tag } from '@/lib/types'
 import ItemFormModal from './ItemFormModal'
 import ConflictDialog from './ConflictDialog'
@@ -107,9 +108,10 @@ interface PendingConflict {
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
-export default function DailyView() {
+export default function DailyView({ initialDate }: { initialDate?: string }) {
   const today = getTodayStr()
-  const [date, setDate] = useState(today)
+  const router = useRouter()
+  const [date, setDate] = useState(initialDate ?? today)
   const [items, setItems] = useState<CalendarItem[]>([])
   const [tags, setTags] = useState<Tag[]>([])
   const [loading, setLoading] = useState(true)
@@ -335,8 +337,14 @@ export default function DailyView() {
           </button>
         )}
         <button
+          onClick={() => router.push(`/?view=week&date=${date}`)}
+          className="text-xs font-medium text-blue-600 hover:text-blue-700 px-2 py-1 rounded-md hover:bg-blue-50"
+        >
+          Week
+        </button>
+        <button
           onClick={() => { setAddTime(undefined); setShowAdd(true) }}
-          className="ml-1 w-8 h-8 flex items-center justify-center rounded-lg bg-blue-600 text-white hover:bg-blue-700 text-lg font-light"
+          className="w-8 h-8 flex items-center justify-center rounded-lg bg-blue-600 text-white hover:bg-blue-700 text-lg font-light"
           aria-label="Add item"
         >
           +
