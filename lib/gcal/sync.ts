@@ -2,9 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getValidAccessToken } from '@/lib/google/tokens'
 import { listEvents, listEventInstances, type GCalEvent } from './api'
 import { parseRRule } from './rrule'
-import { findNonFlexConflict, timeToMinutes } from '@/lib/scheduler'
-import { getNowMinutes, getTodayStr } from '@/lib/scheduler/utils'
-import { optimizeFuture } from '@/lib/scheduler/optimize'
+import { timeToMinutes } from '@/lib/scheduler'
+import { getNowMinutes, getTodayStr, dateToWeekday, addDays } from '@/lib/scheduler/utils'
+import { bumpConflictsToday, optimizeFuture } from '@/lib/scheduler/optimize'
 
 // ── Time helpers ─────────────────────────────────────────────────────────────
 
@@ -35,28 +35,7 @@ function expandWindow(): { timeMin: string; timeMax: string } {
   }
 }
 
-// ── Non-flex conflict recorder ────────────────────────────────────────────────
-
-async function recordConflictIfNeeded(
-  supabase: SupabaseClient,
-  userId: string,
-  date: string,
-  startMins: number,
-  durationMins: number,
-  excludeId: string,
-): Promise<void> {
-  const endMins = startMins + durationMins
-  const conflict = await findNonFlexConflict(supabase, userId, date, startMins, endMins, excludeId)
-  if (!conflict) return
-  await supabase.from('confirmed_overlaps').insert({
-    user_id: userId,
-    nonflex_item_id: conflict.id,
-    nonflex_occurrence_date: null,
-    other_item_id: excludeId,
-    other_item_type: 'non_flexible',
-    overlap_date: date,
-  })
-}
+type TodaySlot = { startMins: number; endMins: number }
 
 // ── Event handlers ────────────────────────────────────────────────────────────
 
@@ -105,6 +84,7 @@ async function handleModifiedInstance(
   userId: string,
   event: GCalEvent,
   affectedDates: Set<string>,
+  todaySlots: TodaySlot[],
   today: string,
 ): Promise<void> {
   if (!event.start?.dateTime) return
@@ -159,7 +139,11 @@ async function handleModifiedInstance(
       .eq('gcal_event_id', event.id)
   }
 
-  if (newDate >= today) affectedDates.add(newDate)
+  if (newDate === today) {
+    todaySlots.push({ startMins: timeToMinutes(newTime), endMins: timeToMinutes(newTime) + duration })
+  } else if (newDate > today) {
+    affectedDates.add(newDate)
+  }
 }
 
 async function upsertWeeklyRecurring(
@@ -167,6 +151,7 @@ async function upsertWeeklyRecurring(
   userId: string,
   event: GCalEvent,
   affectedDates: Set<string>,
+  todaySlots: TodaySlot[],
   today: string,
 ): Promise<void> {
   if (!event.start?.dateTime) return
@@ -211,7 +196,23 @@ async function upsertWeeklyRecurring(
     await supabase.from('schedulable_items').insert(fields)
   }
 
-  if (startDate >= today) affectedDates.add(startDate)
+  // Track today if this series covers today
+  const todayWeekday = dateToWeekday(today)
+  const seriesCoversToday =
+    today >= startDate &&
+    (endDate === null || today <= endDate) &&
+    recurrenceDays.includes(todayWeekday)
+
+  if (seriesCoversToday) {
+    todaySlots.push({ startMins: timeToMinutes(time), endMins: timeToMinutes(time) + duration })
+  }
+
+  // Track earliest future date the series starts or restarts from today onwards
+  if (startDate > today) affectedDates.add(startDate)
+  else if (seriesCoversToday) {
+    // Series already covers today — future optimization starts tomorrow
+    affectedDates.add(addDays(today, 1))
+  }
 }
 
 async function expandNonWeeklyRecurring(
@@ -221,6 +222,7 @@ async function expandNonWeeklyRecurring(
   calendarId: string,
   event: GCalEvent,
   affectedDates: Set<string>,
+  todaySlots: TodaySlot[],
   today: string,
 ): Promise<void> {
   if (!event.start?.dateTime) return
@@ -271,23 +273,19 @@ async function expandNonWeeklyRecurring(
       source: 'gcal',
     }
 
-    let itemId: string
     if (existing) {
       await supabase.from('schedulable_items')
         .update({ ...fields, user_id: undefined })
         .eq('id', existing.id)
-      itemId = existing.id
     } else {
-      const { data: inserted } = await supabase.from('schedulable_items').insert(fields).select('id').single()
-      if (!inserted) continue
-      itemId = inserted.id
-      // Check for conflicts only on newly inserted items
-      if (date >= today) {
-        await recordConflictIfNeeded(supabase, userId, date, timeToMinutes(time), duration, itemId)
-      }
+      await supabase.from('schedulable_items').insert(fields)
     }
 
-    if (date >= today) affectedDates.add(date)
+    if (date === today) {
+      todaySlots.push({ startMins: timeToMinutes(time), endMins: timeToMinutes(time) + duration })
+    } else if (date > today) {
+      affectedDates.add(date)
+    }
   }
 }
 
@@ -296,6 +294,7 @@ async function upsertSingleEvent(
   userId: string,
   event: GCalEvent,
   affectedDates: Set<string>,
+  todaySlots: TodaySlot[],
   today: string,
 ): Promise<void> {
   if (!event.start?.dateTime) return
@@ -328,13 +327,14 @@ async function upsertSingleEvent(
       .update({ ...fields, user_id: undefined })
       .eq('id', existing.id)
   } else {
-    const { data: inserted } = await supabase.from('schedulable_items').insert(fields).select('id').single()
-    if (inserted && date >= today) {
-      await recordConflictIfNeeded(supabase, userId, date, timeToMinutes(time), duration, inserted.id)
-    }
+    await supabase.from('schedulable_items').insert(fields)
   }
 
-  if (date >= today) affectedDates.add(date)
+  if (date === today) {
+    todaySlots.push({ startMins: timeToMinutes(time), endMins: timeToMinutes(time) + duration })
+  } else if (date > today) {
+    affectedDates.add(date)
+  }
 }
 
 // ── Main event dispatcher ─────────────────────────────────────────────────────
@@ -346,6 +346,7 @@ async function processEvent(
   accessToken: string,
   event: GCalEvent,
   affectedDates: Set<string>,
+  todaySlots: TodaySlot[],
   today: string,
 ): Promise<void> {
   // Skip all-day events (no dateTime on start)
@@ -357,7 +358,7 @@ async function processEvent(
   }
 
   if (event.recurringEventId) {
-    await handleModifiedInstance(supabase, userId, event, affectedDates, today)
+    await handleModifiedInstance(supabase, userId, event, affectedDates, todaySlots, today)
     return
   }
 
@@ -366,15 +367,15 @@ async function processEvent(
     if (rruleStr) {
       const parsed = parseRRule(rruleStr)
       if (parsed.isWeekly) {
-        await upsertWeeklyRecurring(supabase, userId, event, affectedDates, today)
+        await upsertWeeklyRecurring(supabase, userId, event, affectedDates, todaySlots, today)
       } else {
-        await expandNonWeeklyRecurring(supabase, userId, accessToken, calendarId, event, affectedDates, today)
+        await expandNonWeeklyRecurring(supabase, userId, accessToken, calendarId, event, affectedDates, todaySlots, today)
       }
     }
     return
   }
 
-  await upsertSingleEvent(supabase, userId, event, affectedDates, today)
+  await upsertSingleEvent(supabase, userId, event, affectedDates, todaySlots, today)
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -398,6 +399,7 @@ export async function runGCalSync(supabase: SupabaseClient, userId: string): Pro
   const calendarId = conn.calendar_id
   const today = getTodayStr()
   const affectedDates = new Set<string>()
+  const todaySlots: TodaySlot[] = []
 
   let pageToken: string | undefined
   let newSyncToken: string | undefined
@@ -426,7 +428,7 @@ export async function runGCalSync(supabase: SupabaseClient, userId: string): Pro
 
       for (const event of page.items ?? []) {
         try {
-          await processEvent(supabase, userId, calendarId, accessToken, event, affectedDates, today)
+          await processEvent(supabase, userId, calendarId, accessToken, event, affectedDates, todaySlots, today)
         } catch (err) {
           console.error('[GCal sync] skipping event', event.id, err)
         }
@@ -450,11 +452,22 @@ export async function runGCalSync(supabase: SupabaseClient, userId: string): Pro
     .update({ gcal_sync_token: newSyncToken ?? null, last_synced_at: new Date().toISOString() })
     .eq('user_id', userId)
 
-  // Re-optimize flex placements for all affected future dates
-  const futureDates = [...affectedDates].filter(d => d >= today).sort()
+  const nowMinutes = getNowMinutes()
+
+  // Today: narrow bump — only move flex items that directly conflict with each synced slot
+  for (const { startMins, endMins } of todaySlots) {
+    try {
+      await bumpConflictsToday(supabase, userId, today, nowMinutes, startMins, endMins)
+    } catch (err) {
+      console.error('[GCal sync] bumpConflictsToday failed:', err)
+    }
+  }
+
+  // Future: scoped re-optimization from the earliest affected date strictly after today
+  const futureDates = [...affectedDates].filter(d => d > today).sort()
   if (futureDates.length > 0) {
     try {
-      await optimizeFuture(supabase, userId, futureDates[0], today, getNowMinutes())
+      await optimizeFuture(supabase, userId, futureDates[0], today, nowMinutes)
     } catch (err) {
       console.error('[GCal sync] re-optimize failed:', err)
     }
