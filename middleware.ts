@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextRequest, NextResponse } from 'next/server'
 
+export const runtime = 'nodejs'
+
 const PUBLIC_PATHS = ['/login', '/auth/callback', '/api/auth']
 
 export async function middleware(request: NextRequest) {
